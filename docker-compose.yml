@@ -1,0 +1,47 @@
+services:
+  api-a:
+    build: .
+    image: dp-transit-api:latest
+    environment:
+      DP_DB_PATH: /data/dp_transit.db
+      DP_LEASE_SECONDS: "15"
+      DP_HEARTBEAT_SECONDS: "3"
+    volumes:
+      - dp_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api-b:
+    image: dp-transit-api:latest
+    build: .
+    environment:
+      DP_DB_PATH: /data/dp_transit.db
+      DP_LEASE_SECONDS: "15"
+      DP_HEARTBEAT_SECONDS: "3"
+    volumes:
+      - dp_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api-a:
+        condition: service_healthy
+      api-b:
+        condition: service_healthy
+
+volumes:
+  dp_data:

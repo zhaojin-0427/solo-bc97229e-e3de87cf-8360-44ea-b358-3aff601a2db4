@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>差分隐私公交客流查询 · 交互演示</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --fg:#e2e8f0;
+          --muted:#94a3b8; --accent:#38bdf8; --ok:#34d399; --warn:#fbbf24; --err:#f87171; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.6; }
+  header { padding:28px 32px 12px; }
+  h1 { margin:0 0 6px; font-size:24px; }
+  .sub { color:var(--muted); font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:18px; padding:18px 32px 40px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .card h2 { margin:0 0 14px; font-size:16px; color:var(--accent); }
+  label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
+  input, select, textarea { width:100%; padding:9px 11px; border-radius:8px; border:1px solid var(--line);
+         background:#0b1220; color:var(--fg); font-size:14px; }
+  textarea { min-height:90px; resize:vertical; font-family:ui-monospace,monospace; }
+  button { margin-top:14px; padding:10px 18px; border:0; border-radius:8px; background:var(--accent);
+           color:#082f49; font-weight:700; cursor:pointer; font-size:14px; }
+  button.secondary { background:#475569; color:var(--fg); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  pre { background:#0b1220; border:1px solid var(--line); border-radius:10px; padding:12px;
+        overflow:auto; font-size:12.5px; max-height:340px; margin:10px 0 0; white-space:pre-wrap; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; margin-left:6px; }
+  .pill.ok { background:rgba(52,211,153,.15); color:var(--ok); }
+  .pill.warn { background:rgba(251,191,36,.15); color:var(--warn); }
+  .pill.err { background:rgba(248,113,113,.15); color:var(--err); }
+  .budget-row { display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px dashed var(--line); font-size:14px; }
+  .budget-row b { font-variant-numeric:tabular-nums; }
+  .bar { height:10px; border-radius:6px; background:#0b1220; overflow:hidden; margin-top:12px; display:flex; }
+  .bar .used { background:var(--err); } .bar .res { background:var(--warn); } .bar .free { background:var(--ok); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .hint { color:var(--muted); font-size:12px; margin-top:6px; }
+  .worker { font-family:ui-monospace,monospace; font-size:11px; color:var(--muted); }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🚌 差分隐私公交客流查询 <span id="svc" class="pill warn">检测中…</span></h1>
+  <div class="sub">
+    去重乘客数 + 独立 Laplace(0, 1/ε) 噪声 · 总预算 1 · 先预留后实扣 · 同查询永久复用不重复扣费
+    · 本次响应工作者：<span id="worker" class="worker">—</span>
+    &nbsp;|&nbsp; <a href="/docs" target="_blank">Swagger 文档 /docs</a>
+  </div>
+</header>
+
+<div class="grid">
+  <section class="card">
+    <h2>1️⃣ 导入乘车 CSV（仅一次，之后只读）</h2>
+    <input type="file" id="csvfile" accept=".csv,text/csv">
+    <div class="hint">表头需含 匿名乘客号/passenger_id 与 上车站/station 两列</div>
+    <button onclick="doImport()">导入</button>
+    <button class="secondary" onclick="loadDemo()">填入示例 CSV</button>
+    <pre id="import-out">尚未导入</pre>
+  </section>
+
+  <section class="card">
+    <h2>2️⃣ 隐私客流查询</h2>
+    <label>站点集合（逗号或换行分隔，顺序无关、自动去重）</label>
+    <textarea id="stations" placeholder="例如：人民广场, 南京西路, 陆家嘴"></textarea>
+    <label>ε（仅允许 0.1 / 0.2 / 0.5）</label>
+    <select id="epsilon"><option>0.1</option><option selected>0.2</option><option>0.5</option></select>
+    <button onclick="doQuery(false)">提交查询（预留 ε）</button>
+    <button class="secondary" onclick="doQuery(true)">重复同查询（验证复用、零扣费、同噪声）</button>
+    <pre id="query-out">—</pre>
+  </section>
+
+  <section class="card">
+    <h2>3️⃣ 预算账本 <button class="secondary" style="margin:0 0 0 10px;padding:5px 12px" onclick="refreshBudget()">刷新</button></h2>
+    <div class="budget-row"><span>总预算 total</span><b id="b-total">–</b></div>
+    <div class="budget-row"><span>已实扣 used</span><b id="b-used">–</b></div>
+    <div class="budget-row"><span>在途预留 reserved</span><b id="b-reserved">–</b></div>
+    <div class="budget-row"><span>剩余 remaining</span><b id="b-remaining">–</b></div>
+    <div class="bar">
+      <div class="used" id="bar-used" style="width:0%"></div>
+      <div class="res" id="bar-res" style="width:0%"></div>
+      <div class="free" id="bar-free" style="width:100%"></div>
+    </div>
+    <div class="hint">红=已实扣，黄=在途预留，绿=剩余；预留+已用超过 1 时查询被拒绝（HTTP 402）</div>
+  </section>
+
+  <section class="card">
+    <h2>4️⃣ 任务状态 <button class="secondary" style="margin:0 0 0 10px;padding:5px 12px" onclick="refreshTasks()">刷新</button></h2>
+    <div style="overflow:auto;max-height:380px">
+      <table>
+        <thead><tr><th>#</th><th>ε</th><th>状态</th><th>工作者/代</th><th>加噪结果</th></tr></thead>
+        <tbody id="task-rows"><tr><td colspan="5" class="hint">点击刷新加载</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+async function call(path, opts) {
+  const resp = await fetch(path, opts);
+  const worker = resp.headers.get("X-Worker-Id") || "—";
+  $("worker").textContent = worker;
+  let body;
+  try { body = await resp.json(); } catch { body = await resp.text(); }
+  if (!resp.ok) throw Object.assign(new Error("HTTP " + resp.status), {body});
+  return body;
+}
+function show(el, data, ok=true) {
+  $(el).textContent = JSON.stringify(data, null, 2);
+  $(el).style.color = ok ? "var(--fg)" : "var(--err)";
+}
+const SAMPLE = `匿名乘客号,上车站
+P001,人民广场
+P002,人民广场
+P001,南京西路
+P003,陆家嘴
+P004,人民广场
+P002,陆家嘴
+P005,南京西路
+P006,陆家嘴
+P003,人民广场
+P007,静安寺
+P008,静安寺
+P001,陆家嘴
+P009,南京西路
+P010,人民广场`;
+function loadDemo() {
+  const blob = new Blob([SAMPLE], {type:"text/csv"});
+  const file = new File([blob], "demo_rides.csv", {type:"text/csv"});
+  const dt = new DataTransfer(); dt.items.add(file); $("csvfile").files = dt;
+  $("stations").value = "人民广场,南京西路,陆家嘴";
+}
+async function doImport() {
+  const f = $("csvfile").files[0];
+  if (!f) return alert("先选择 CSV 文件（可点击“填入示例 CSV”）");
+  const fd = new FormData(); fd.append("file", f);
+  try { show("import-out", await call("/import", {method:"POST", body:fd})); refreshBudget(); }
+  catch (e) { show("import-out", e.body || e.message, false); }
+}
+async function doQuery(twice) {
+  const payload = {
+    stations: $("stations").value.split(/[,\n]/).map(s => s.trim()).filter(Boolean),
+    epsilon: parseFloat($("epsilon").value)
+  };
+  try {
+    const r1 = await call("/query", {method:"POST", headers:{"Content-Type":"application/json"},
+                                     body: JSON.stringify(payload)});
+    let out = r1;
+    if (twice) {
+      // 打乱站点顺序，证明顺序无关且复用同一结果
+      const shuffled = [...payload.stations].reverse();
+      const r2 = await call("/query", {method:"POST", headers:{"Content-Type":"application/json"},
+                                       body: JSON.stringify({...payload, stations: shuffled})});
+      out = {第一次: r1, 第二次_逆序: r2,
+             校验: {噪声相同: r1.noisy_count === r2.noisy_count,
+                    第二次不扣费: r2.charged_epsilon === 0,
+                    同key: r1.canonical_key === r2.canonical_key}};
+    }
+    show("query-out", out); refreshBudget(); refreshTasks();
+  } catch (e) { show("query-out", e.body || e.message, false); refreshBudget(); }
+}
+async function refreshBudget() {
+  try {
+    const b = await call("/budget");
+    $("b-total").textContent = b.total; $("b-used").textContent = b.used;
+    $("b-reserved").textContent = b.reserved; $("b-remaining").textContent = b.remaining;
+    const pct = n => (n / b.total * 100).toFixed(1) + "%";
+    $("bar-used").style.width = pct(b.used);
+    $("bar-res").style.width = pct(b.reserved);
+    $("bar-free").style.width = pct(Math.max(0, b.remaining));
+  } catch (e) { /* 忽略轮询错误 */ }
+}
+async function refreshTasks() {
+  try {
+    const tasks = await call("/tasks?limit=50");
+    if (!tasks.length) { $("task-rows").innerHTML = '<tr><td colspan="5" class="hint">暂无任务</td></tr>'; return; }
+    $("task-rows").innerHTML = tasks.map(t => {
+      const cls = t.status === "succeeded" ? "ok" : t.status === "failed" ? "err" : "warn";
+      const nc = t.noisy_count === null || t.noisy_count === undefined ? "—" : t.noisy_count.toFixed(4);
+      return `<tr><td>${t.task_id}</td><td>${t.epsilon}</td>
+        <td><span class="pill ${cls}">${t.status}${t.active ? "/active" : ""}</span></td>
+        <td class="worker">${t.worker_id.split(":").slice(-1)[0]}<br>gen ${t.generation}</td>
+        <td>${nc}</td></tr>`;
+    }).join("");
+  } catch (e) { /* 忽略 */ }
+}
+async function heartbeat() {
+  try {
+    await call("/health");
+    $("svc").textContent = "服务在线"; $("svc").className = "pill ok";
+  } catch { $("svc").textContent = "不可用"; $("svc").className = "pill err"; }
+}
+heartbeat(); setInterval(heartbeat, 5000); setInterval(refreshBudget, 4000);
+refreshBudget(); refreshTasks();
+</script>
+</body>
+</html>
